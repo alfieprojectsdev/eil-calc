@@ -34,3 +34,5 @@ venv/
 
 # Logs
 *.log
+session_log.md
+
