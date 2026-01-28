@@ -8,7 +8,7 @@
 - **Compliance Module (Phase 1):**
     - **Slope Stability:** Calculates maximum gradient to flag SAFE vs. SUSCEPTIBLE zones.
     - **Depositional Safety:** Analyzes runout zones using the geometric shadow angle separation (H > 3 * Delta_E).
-- **Hybrid Architecture (Phase 2 - Experimental):** Skeleton for integrating Physically-Guided ML (Landlab + XGBoost).
+- **Hybrid Architecture (Phase 2 - Planned):** Future integration of Physically-Guided ML (Landlab + XGBoost). See RFC for details.
 - **Orchestrator:** Single entry-point for managing the full assessment pipeline.
 
 ## Installation
@@ -50,8 +50,7 @@ uv run python orchestrator.py
 - `smart_fetcher.py`: Data abstraction layer.
 - `slope_stability.py`: Core logic for slope hazards.
 - `calculate_depositional_safety.py`: Core logic for depositional/runout hazards.
-- `hybrid_engine.py`: Stub for future scientific research mode.
-- `tech-spec_ADR.md`: Technical Specifications and Architectural Decision Records.
+- `RFC_001-EIL-CALC.md`: Technical Specifications, ADRs, and RFC documentation.
 
 ## License
 Proprietary / Internal Use Only.

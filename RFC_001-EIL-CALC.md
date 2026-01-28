@@ -1,7 +1,3 @@
-Here is the comprehensive, fully compiled **Request for Comments (RFC)** document. It integrates the core proposal, technical specifications, architecture decisions (ADR), and the cross-divisional glossary into a single professional artifact.
-
----
-
 # RFC: Automated Earthquake-Induced Landslide (EIL) Assessment Engine ("EIL-Calc")
 
 | Meta Data | Details |
