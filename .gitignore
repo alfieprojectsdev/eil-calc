@@ -36,3 +36,5 @@ venv/
 *.log
 session_log.md
 
+# misc
+archive/
