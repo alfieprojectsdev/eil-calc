@@ -74,22 +74,19 @@ class EILOrchestrator:
         return results
 
 
+# Manual smoke test — requires 'Backup Plus' drive mounted at:
+#   /run/media/finch/Backup Plus/eil-calc/
+# Run with: uv run python orchestrator.py
 if __name__ == "__main__":
     mock_payload = {
-        "project_id": "test-001",
+        "project_id": "smoke-test-001",
         "geometry": {
             "type": "Polygon",
-            "coordinates": [
-                [
-                    [121.0, 14.5],
-                    [121.01, 14.5],
-                    [121.01, 14.51],
-                    [121.0, 14.51],
-                    [121.0, 14.5],
-                ]
-            ],
+            "coordinates": [[[121.05, 14.52], [121.06, 14.52], [121.06, 14.53], [121.05, 14.53], [121.05, 14.52]]]
         },
-        "config": {"mode": "compliance"},
+        "config": {
+            "mode": "compliance"
+        }
     }
     orc = EILOrchestrator()
     print(json.dumps(orc.run_assessment(mock_payload), indent=2))
