@@ -51,7 +51,7 @@ def calculate_depositional_safety(parcel_geojson, dem_path, search_buffer_meters
         # Find coordinates of the min point (pixel center)
         # Note: robust implementation would vectorize this, simplified here for prototype
         min_idx = np.unravel_index(np.argmin(site_elevations), site_elevations.shape)
-        site_min_xy = src.xy(min_idx[0], min_idx[1]) # Returns (x, y)
+        site_min_xy = rasterio.transform.xy(site_transform, min_idx[0], min_idx[1]) # Returns (x, y)
         site_point = Point(site_min_xy)
 
         # --- STEP B: Analyze the Vicinity (Find the Peak) ---
