@@ -1,55 +1,71 @@
 import os
 import rasterio
 
+# Default paths — single nationwide GeoTIFFs on the 'Backup Plus' external drive.
+# Drive mount point: /run/media/finch/Backup Plus/
+IFSAR_DEFAULT = "/run/media/finch/Backup Plus/eil-calc/IfSAR/IfSAR_PH.tif"
+SRTM_DEFAULT  = "/run/media/finch/Backup Plus/eil-calc/SRTM/SRTM30m.tif"
+
+
 class SmartFetcher:
     """
-    Abstracts DEM sources. 
-    Prioritizes Local IfSAR (5m) > Cloud SRTM (30m).
+    Abstracts DEM sources.
+    Priority: Local IfSAR (5m) > Local SRTM (30m).
+
+    Both datasets are single nationwide GeoTIFFs — no tile-lookup needed.
+    Raises FileNotFoundError if neither source is accessible (e.g. drive not mounted).
     """
 
     def __init__(self, config=None):
         self.config = config or {}
-        self.preferred_source = self.config.get('dem_source', 'auto')
-        # In a real app, these paths would be in config or env vars
-        self.local_ifsar_path = "/data/ifsar/philippines/" 
-        self.srtm_fallback_url = "https://srtm-source.example.com/api" # Mock URL
+        self.ifsar_path = self.config.get('ifsar_path', IFSAR_DEFAULT)
+        self.srtm_path  = self.config.get('srtm_path',  SRTM_DEFAULT)
 
-    def fetch_dem_path(self, bounds):
+    def fetch_dem_path(self, bounds=None):
         """
-        Locates the best available DEM for the given bounds.
-        
+        Returns the path to the best available DEM.
+
         Args:
-            bounds (tuple): (minx, miny, maxx, maxy)
-        
+            bounds: unused — nationwide files cover all of PH.
+
         Returns:
-            str: Path or URL to the DEM.
-            str: Metadata/Source type ('ifsar', 'srtm', 'srtm-fallback').
+            (str, str): (path, source_type) where source_type is one of
+                        'local_override', 'ifsar', 'srtm'.
+
+        Raises:
+            FileNotFoundError: if neither IfSAR nor SRTM file is accessible.
         """
-        
-        # 1. Check Local specific path override (for testing)
+        # Explicit path override — used in tests and one-off runs.
         if 'local_dem_path' in self.config:
-            if os.path.exists(self.config['local_dem_path']):
-                return self.config['local_dem_path'], 'local_override'
-        
-        # 2. Logic to search for IfSAR tiles covering these bounds
-        # (Mock implementation: Checking if a file exists in updated structure)
-        # For prototype, we might just assume if a file is passed in config it's the one.
-        
-        # 3. Fallback
-        print("Warning: High-res IfSAR not found (Mock). Falling back to global SRTM.")
-        return "mock_srtm_30m.tif", "srtm_30m_fallback"
+            path = self.config['local_dem_path']
+            if os.path.exists(path):
+                return path, 'local_override'
+            raise FileNotFoundError(f"local_dem_path override not found: {path}")
+
+        if os.path.exists(self.ifsar_path):
+            return self.ifsar_path, 'ifsar'
+
+        if os.path.exists(self.srtm_path):
+            print(f"Warning: IfSAR not found at '{self.ifsar_path}'. Falling back to SRTM (30m).")
+            return self.srtm_path, 'srtm'
+
+        raise FileNotFoundError(
+            "No DEM source available. Ensure the 'Backup Plus' drive is mounted.\n"
+            f"  IfSAR expected : {self.ifsar_path}\n"
+            f"  SRTM  expected : {self.srtm_path}"
+        )
 
     def validate_resolution(self, dem_path):
         """
-        Checks if resolution meets the < 5m requirement for certain modules.
+        Checks whether the DEM resolution meets the ≤5m requirement.
+        Resolution is read from the file's native CRS units (metres for projected DEMs).
         """
         try:
             with rasterio.open(dem_path) as src:
                 res_x, res_y = src.res
-                # Assuming meters
                 if res_x <= 5.0 and res_y <= 5.0:
                     return True, f"{res_x}m"
                 else:
                     return False, f"{res_x}m"
-        except Exception as e:
+        except Exception:
             return False, "error_reading_file"
