@@ -1,3 +1,5 @@
+import math
+
 import rasterio.mask
 import numpy as np
 from shapely.geometry.base import BaseGeometry
@@ -23,7 +25,14 @@ def compute_slope_stability(geometry: BaseGeometry, dataset) -> SlopeResult | di
         return {"error": "No valid data in parcel"}
 
     px, py = dataset.res
-    dz_dy, dz_dx = np.gradient(elevation_data, py, px)
+    if dataset.crs and dataset.crs.is_geographic:
+        # DEM resolution is in degrees — convert to metres so arctan yields real slope angles.
+        lat_rad = math.radians(geometry.centroid.y)
+        py_m = py * 111320.0
+        px_m = px * 111320.0 * math.cos(lat_rad)
+    else:
+        py_m, px_m = py, px
+    dz_dy, dz_dx = np.gradient(elevation_data, py_m, px_m)
     slope_degrees = np.degrees(np.arctan(np.sqrt(dz_dx**2 + dz_dy**2)))
     site_slopes = slope_degrees[valid_mask]
 

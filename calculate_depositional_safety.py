@@ -1,6 +1,9 @@
+import math
+
 import rasterio
 import rasterio.mask
 import numpy as np
+from pyproj import Geod
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
@@ -48,7 +51,14 @@ def compute_depositional_safety(
     site_point = Point(site_min_xy)
 
     # --- STEP B: Analyse the vicinity (find the peak) ---
-    vicinity_polygon = geometry.buffer(search_buffer_meters)
+    # Buffer must be in the dataset's native CRS units.
+    # For geographic CRS (degrees), convert metres to degrees at the parcel's latitude.
+    if dataset.crs and dataset.crs.is_geographic:
+        lat_rad = math.radians(geometry.centroid.y)
+        search_buffer = search_buffer_meters / (111320.0 * math.cos(lat_rad))
+    else:
+        search_buffer = float(search_buffer_meters)
+    vicinity_polygon = geometry.buffer(search_buffer)
 
     vicinity_img, vic_transform = rasterio.mask.mask(
         dataset, [vicinity_polygon], crop=True
@@ -64,7 +74,14 @@ def compute_depositional_safety(
 
     # --- STEP C: Physics logic (H > 3 × Delta_E) ---
     delta_e = elev_peak_max - float(elev_site_min)
-    h_distance = float(site_point.distance(peak_point))
+    # h_distance must be in metres to compare against delta_e (also metres).
+    # For geographic CRS, use geodetic distance via pyproj; for projected, use Euclidean.
+    if dataset.crs and dataset.crs.is_geographic:
+        geod = Geod(ellps="WGS84")
+        _, _, h_distance = geod.inv(site_point.x, site_point.y, peak_point.x, peak_point.y)
+        h_distance = float(h_distance)
+    else:
+        h_distance = float(site_point.distance(peak_point))
     required_runout = 3.0 * delta_e
 
     if h_distance > required_runout:

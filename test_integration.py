@@ -133,17 +133,17 @@ class TestIntegrationDepositional(unittest.TestCase):
         self.assertIn("metrics", result)
         self.assertIn("assessment", result)
 
-    def test_depositional_status_is_prone(self):
-        """Bukidnon parcel is inside the runout zone — must be PRONE."""
+    def test_depositional_status_is_safe(self):
+        """Bukidnon parcel is beyond the runout zone — must be SAFE (h=1063m > 3×168m=504m)."""
         result = compute_depositional_safety(
             self.parcel_geom, self.dataset, search_buffer_meters=1000
         )
 
         status = result["assessment"]["status"]
         self.assertIn(
-            "PRONE",
+            "SAFE",
             status,
-            msg=f"Expected PRONE status for within-runout parcel, got {status!r}",
+            msg=f"Expected SAFE status for beyond-runout parcel, got {status!r}",
         )
 
     def test_depositional_metrics_ground_truth(self):

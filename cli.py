@@ -38,10 +38,22 @@ def main(argv=None):
         print(f"Error: Invalid GeoJSON: {e}", file=sys.stderr)
         sys.exit(2)
 
+    # Extract geometry — accept FeatureCollection, Feature, or bare geometry
+    if geojson.get("type") == "FeatureCollection":
+        features = geojson.get("features", [])
+        if not features:
+            print("Error: FeatureCollection contains no features.", file=sys.stderr)
+            sys.exit(2)
+        geometry = features[0]["geometry"]
+    elif geojson.get("type") == "Feature":
+        geometry = geojson["geometry"]
+    else:
+        geometry = geojson  # bare geometry dict
+
     # Build payload
     payload = {
         "project_id": args.project_id,
-        "geometry": geojson.get("geometry", geojson),  # accept Feature or bare geometry
+        "geometry": geometry,
         "config": {"mode": args.mode},
     }
 
