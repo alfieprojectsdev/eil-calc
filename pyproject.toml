@@ -9,3 +9,6 @@ dependencies = [
     "rasterio>=1.4.4",
     "shapely>=2.1.2",
 ]
+
+[project.scripts]
+eil-calc = "cli:main"

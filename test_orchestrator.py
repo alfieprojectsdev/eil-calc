@@ -1,3 +1,4 @@
+import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -92,6 +93,51 @@ class TestEILOrchestrator(unittest.TestCase):
         result = orc.run_assessment(payload)
 
         self.assertEqual(result["phase_1_compliance"]["overall_status"], "NOT CERTIFIED")
+
+
+class TestCLI(unittest.TestCase):
+
+    @patch('cli.EILOrchestrator')
+    def test_cli_stdout(self, mock_orc_cls):
+        import tempfile
+        import os
+        import io
+        from contextlib import redirect_stdout
+
+        mock_orc = mock_orc_cls.return_value
+        mock_orc.run_assessment.return_value = {"project_id": "test", "result": "ok"}
+
+        # Write a temp GeoJSON file
+        geojson = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [121.0, 14.5],
+                        [121.1, 14.5],
+                        [121.1, 14.6],
+                        [121.0, 14.6],
+                        [121.0, 14.5],
+                    ]
+                ],
+            },
+        }
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.geojson', delete=False) as f:
+            json.dump(geojson, f)
+            tmp_path = f.name
+
+        try:
+            from cli import main
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                with self.assertRaises(SystemExit) as cm:
+                    main(["--geojson", tmp_path, "--project-id", "test"])
+            self.assertEqual(cm.exception.code, 0)
+            output = json.loads(buf.getvalue())
+            self.assertEqual(output["project_id"], "test")
+        finally:
+            os.unlink(tmp_path)
 
 
 if __name__ == "__main__":
