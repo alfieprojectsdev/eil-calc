@@ -32,6 +32,10 @@ venv/
 !test_*.json
 !mock_*.json
 
+# Keep test fixtures
+!test_fixtures/
+!test_fixtures/*.tif
+
 # Logs
 *.log
 session_log.md
