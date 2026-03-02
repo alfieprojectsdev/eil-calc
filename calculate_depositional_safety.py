@@ -1,119 +1,99 @@
 import rasterio
 import rasterio.mask
 import numpy as np
-from rasterio.crs import CRS
-from rasterio.warp import transform_geom
-from shapely.geometry import shape, Point, mapping
-from shapely.ops import transform
-import json
+from shapely.geometry import Point
+from shapely.geometry.base import BaseGeometry
 
-def calculate_depositional_safety(parcel_geojson, dem_path, search_buffer_meters=1000):
-    """
-    Calculates EIL Depositional Zone safety based on geometric reach.
+from eil_types import (
+    DEMContext,
+    DepositionalAssessment,
+    DepositionalMetrics,
+    DepositionalResult,
+)
+
+
+def compute_depositional_safety(
+    geometry: BaseGeometry,
+    dataset,
+    search_buffer_meters: int = 1000,
+) -> DepositionalResult | dict:
+    """Compute depositional zone safety from an open rasterio dataset.
+
+    Pure computation — geometry must already be in the dataset CRS.
+    No CRS reprojection is performed here; that responsibility belongs
+    to the orchestrator.
 
     Args:
-        parcel_geojson (dict): The GeoJSON dictionary of the site.
-        dem_path (str): Path to the DEM (GeoTIFF).
-        search_buffer_meters (int): Distance to search upslope for the 'Peak'.
+        geometry:              Parcel polygon already in dataset CRS.
+        dataset:               Open rasterio dataset.
+        search_buffer_meters:  Radius (metres) to search upslope for the peak.
 
     Returns:
-        dict: JSON object with H, Delta_E, and Safety Status.
+        DepositionalResult dict or {"error": ...} on failure.
     """
+    # --- STEP A: Analyse the site (parcel) ---
+    site_img, site_transform = rasterio.mask.mask(dataset, [geometry], crop=True)
+    site_elevations = site_img[0]  # Band 1
 
-    # 1. Parse Geometry
-    # GeoJSON spec (RFC 7946) mandates WGS84 (EPSG:4326).
-    site_polygon = shape(parcel_geojson['geometry'])
+    site_valid_elevs = site_elevations[site_elevations != dataset.nodata]
+    if len(site_valid_elevs) == 0:
+        return {"error": "No valid elevation data found inside parcel geometry"}
 
-    # Open DEM
-    with rasterio.open(dem_path) as src:
+    # Site elevation = lowest point in the lot.
+    elev_site_min = np.min(site_valid_elevs)
 
-        # Reproject input polygon to DEM CRS if needed.
-        # IfSAR DEMs are typically in a projected CRS (e.g. UTM); buffering in
-        # degrees instead of metres produces wildly wrong vicinity radii.
-        wgs84 = CRS.from_epsg(4326)
-        if not src.crs.equals(wgs84):
-            site_polygon = shape(transform_geom(wgs84, src.crs, mapping(site_polygon)))
+    # Coordinates of the minimum-elevation pixel.
+    min_idx = np.unravel_index(np.argmin(site_elevations), site_elevations.shape)
+    site_min_xy = rasterio.transform.xy(site_transform, min_idx[0], min_idx[1])
+    site_point = Point(site_min_xy)
 
-        # --- STEP A: Analyze the Site (Parcel) ---
-        # Mask DEM to exactly the parcel boundaries to find the Site's lowest point
-        site_img, site_transform = rasterio.mask.mask(src, [site_polygon], crop=True)
-        site_elevations = site_img[0] # Band 1
+    # --- STEP B: Analyse the vicinity (find the peak) ---
+    vicinity_polygon = geometry.buffer(search_buffer_meters)
 
-        # Filter out NoData (usually -9999 or similar)
-        site_valid_elevs = site_elevations[site_elevations != src.nodata]
+    vicinity_img, vic_transform = rasterio.mask.mask(
+        dataset, [vicinity_polygon], crop=True
+    )
+    vic_elevations = vicinity_img[0]
+    vic_valid_elevs = vic_elevations[vic_elevations != dataset.nodata]
 
-        if len(site_valid_elevs) == 0:
-            return {"error": "No valid elevation data found inside parcel geometry"}
+    elev_peak_max = float(np.max(vic_valid_elevs))
 
-        # Define 'Site' elevation as the lowest point in the lot
-        elev_site_min = np.min(site_valid_elevs)
+    max_idx = np.unravel_index(np.argmax(vic_elevations), vic_elevations.shape)
+    xs, ys = rasterio.transform.xy(vic_transform, max_idx[0], max_idx[1])
+    peak_point = Point(xs, ys)
 
-        # Find coordinates of the min point (pixel center)
-        # Note: robust implementation would vectorize this, simplified here for prototype
-        min_idx = np.unravel_index(np.argmin(site_elevations), site_elevations.shape)
-        site_min_xy = rasterio.transform.xy(site_transform, min_idx[0], min_idx[1]) # Returns (x, y)
-        site_point = Point(site_min_xy)
+    # --- STEP C: Physics logic (H > 3 × Delta_E) ---
+    delta_e = elev_peak_max - float(elev_site_min)
+    h_distance = float(site_point.distance(peak_point))
+    required_runout = 3.0 * delta_e
 
-        # --- STEP B: Analyze the Vicinity (Find the Peak) ---
-        # Create a buffer to look for the hazard source (the mountain peak)
-        # Note: This assumes projected CRS (meters). If Lat/Lon, this buffer needs reprojection.
-        vicinity_polygon = site_polygon.buffer(search_buffer_meters)
+    if h_distance > required_runout:
+        status = "SAFE (Beyond Runout)"
+        is_compliant = True
+    else:
+        status = "PRONE (Within Runout Zone)"
+        is_compliant = False
 
-        vicinity_img, vic_transform = rasterio.mask.mask(src, [vicinity_polygon], crop=True)
-        vic_elevations = vicinity_img[0]
-        vic_valid_elevs = vic_elevations[vic_elevations != src.nodata]
+    return DepositionalResult(
+        metrics=DepositionalMetrics(
+            elevation_peak=elev_peak_max,
+            elevation_site=float(elev_site_min),
+            delta_e=delta_e,
+            horizontal_distance_h=h_distance,
+            required_runout_3x=required_runout,
+        ),
+        assessment=DepositionalAssessment(
+            status=status,
+            is_compliant=is_compliant,
+        ),
+    )
 
-        # Define 'Peak' as the highest point in the search buffer
-        elev_peak_max = np.max(vic_valid_elevs)
 
-        # Find coordinates of the Peak
-        max_idx = np.unravel_index(np.argmax(vic_elevations), vic_elevations.shape)
-        # We need to transform relative pixel coords back to world coords
-        # Using the transform of the cropped vicinity image
-        xs, ys = rasterio.transform.xy(vic_transform, max_idx[0], max_idx[1])
-        peak_point = Point(xs, ys)
-
-        # --- STEP C: The Physics Logic (H > 3 * Delta_E) ---
-
-        # Calculate Delta E (Elevation Difference)
-        delta_e = elev_peak_max - elev_site_min
-
-        # Calculate H (Horizontal Euclidean Distance)
-        h_distance = site_point.distance(peak_point)
-
-        # The Threshold
-        required_runout = 3 * delta_e
-
-        if h_distance > required_runout:
-            status = "SAFE (Beyond Runout)"
-            is_safe = True
-        else:
-            status = "PRONE (Within Runout Zone)"
-            is_safe = False
-
-        return {
-            "metrics": {
-                "elevation_peak": float(elev_peak_max),
-                "elevation_site": float(elev_site_min),
-                "delta_e": float(delta_e),
-                "horizontal_distance_h": float(h_distance),
-                "required_runout_3x": float(required_runout)
-            },
-            "assessment": {
-                "status": status,
-                "is_compliant": is_safe
-            }
-        }
-
-# Example Usage Mockup
-if __name__ == "__main__":
-    # Mock GeoJSON for testing
-    mock_geojson = {
-        "type": "Feature",
-        "geometry": {
-            "type": "Polygon",
-            "coordinates": [[[121.0, 14.5], [121.01, 14.5], [121.01, 14.51], [121.0, 14.51], [121.0, 14.5]]]
-        }
-    }
-
-    # print(calculate_depositional_safety(mock_geojson, "path/to/local_dem.tif"))
+def calculate_depositional_safety(
+    context: DEMContext,
+    search_buffer_meters: int = 1000,
+) -> DepositionalResult | dict:
+    """Entry point accepting a DEMContext (geometry already projected)."""
+    return compute_depositional_safety(
+        context.geometry, context.dataset, search_buffer_meters
+    )
