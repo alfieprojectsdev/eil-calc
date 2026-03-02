@@ -1,6 +1,8 @@
+import math
 import unittest
 import numpy as np
 import rasterio
+import rasterio.mask
 from rasterio.transform import from_origin
 from rasterio.io import MemoryFile
 from shapely.geometry import box, mapping, Point
@@ -132,6 +134,98 @@ class TestEILTools(unittest.TestCase):
                 print(f"Result:       {result['status']}")
 
                 self.assertEqual(result['status'], "SAFE")
+
+def calculate_slope_logic(site_polygon, src):
+    """
+    Logic mirror of slope_stability.calculate_slope_stability for in-memory testing.
+    Takes a Shapely polygon and an open rasterio dataset directly (no file path needed).
+    """
+    px, py = src.res
+    out_image, _ = rasterio.mask.mask(src, [site_polygon], crop=True)
+    elevation_data = out_image[0]
+
+    valid_mask = elevation_data != src.nodata
+    if valid_mask.sum() == 0:
+        return {"error": "No valid data in parcel"}
+
+    dz_dy, dz_dx = np.gradient(elevation_data, py, px)
+    slope_degrees = np.degrees(np.arctan(np.sqrt(dz_dx**2 + dz_dy**2)))
+    site_slopes = slope_degrees[valid_mask]
+
+    max_slope = float(np.max(site_slopes))
+
+    if max_slope > 16.0:
+        status = "SUSCEPTIBLE"
+    elif max_slope > 14.0:
+        status = "FLAG FOR REVIEW"
+    else:
+        status = "SAFE"
+
+    return {"status": status, "max_slope": max_slope}
+
+
+class TestSlopeStability(unittest.TestCase):
+
+    def create_slope_dem(self, target_degrees, resolution=1.0):
+        """
+        Creates a 100x100 DEM with a uniform slope in the X direction.
+        Rise per pixel = tan(target_degrees) * resolution, so np.gradient
+        recovers exactly target_degrees for every interior and edge pixel
+        (linear slope → central and forward/backward differences agree).
+        """
+        rise_per_pixel = math.tan(math.radians(target_degrees)) * resolution
+        data = np.zeros((100, 100), dtype=rasterio.float32)
+        for x in range(100):
+            data[:, x] = x * rise_per_pixel
+        transform = from_origin(0, 100, resolution, resolution)
+        return data, transform
+
+    def _run(self, target_degrees):
+        data, transform = self.create_slope_dem(target_degrees)
+        site_poly = box(20, 20, 80, 80)
+        with MemoryFile() as memfile:
+            with memfile.open(driver='GTiff', height=100, width=100, count=1,
+                              dtype=rasterio.float32, transform=transform,
+                              nodata=-9999) as ds:
+                ds.write(data, 1)
+                return calculate_slope_logic(site_poly, ds)
+
+    def test_safe_slope(self):
+        """10° slope — well below the 14° threshold."""
+        result = self._run(10.0)
+        print(f"\n--- SAFE slope --- max={result['max_slope']:.2f}°")
+        self.assertEqual(result['status'], 'SAFE')
+        self.assertLessEqual(result['max_slope'], 14.0)
+
+    def test_review_slope(self):
+        """15° slope — sits in the 14°–16° review buffer."""
+        result = self._run(15.0)
+        print(f"\n--- FLAG FOR REVIEW slope --- max={result['max_slope']:.2f}°")
+        self.assertEqual(result['status'], 'FLAG FOR REVIEW')
+        self.assertGreater(result['max_slope'], 14.0)
+        self.assertLessEqual(result['max_slope'], 16.0)
+
+    def test_susceptible_slope(self):
+        """20° slope — above the 16° susceptibility threshold."""
+        result = self._run(20.0)
+        print(f"\n--- SUSCEPTIBLE slope --- max={result['max_slope']:.2f}°")
+        self.assertEqual(result['status'], 'SUSCEPTIBLE')
+        self.assertGreater(result['max_slope'], 16.0)
+
+    def test_all_nodata_parcel(self):
+        """Parcel overlaps DEM extent but every pixel is nodata — expect error dict."""
+        data = np.full((100, 100), -9999, dtype=rasterio.float32)
+        transform = from_origin(0, 100, 1, 1)
+        site_poly = box(20, 20, 80, 80)
+        with MemoryFile() as memfile:
+            with memfile.open(driver='GTiff', height=100, width=100, count=1,
+                              dtype=rasterio.float32, transform=transform,
+                              nodata=-9999) as ds:
+                ds.write(data, 1)
+                result = calculate_slope_logic(site_poly, ds)
+        print(f"\n--- nodata parcel --- result={result}")
+        self.assertIn('error', result)
+
 
 if __name__ == '__main__':
     unittest.main()
