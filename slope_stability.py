@@ -1,22 +1,33 @@
 import rasterio
 import rasterio.mask
 import numpy as np
-from shapely.geometry import shape
+from rasterio.crs import CRS
+from rasterio.warp import transform_geom
+from shapely.geometry import shape, mapping
 
 def calculate_slope_stability(parcel_geojson, dem_path):
     """
     Calculates EIL Slope Stability based on gradient thresholds.
     
     Thresholds:
-    - < 5 deg: SAFE
-    - 5 - 15 deg: REVIEW (Buffer)
-    - > 15 deg: SUSCEPTIBLE
+    Thresholds:
+    - <= 14 deg: SAFE
+    - 14 - 16 deg: REVIEW (Buffer)
+    - > 16 deg: SUSCEPTIBLE
     """
     
     # 1. Parse Geometry
+    # GeoJSON spec (RFC 7946) mandates WGS84 (EPSG:4326).
     site_polygon = shape(parcel_geojson['geometry'])
-    
+
     with rasterio.open(dem_path) as src:
+        # Reproject input polygon to DEM CRS if needed.
+        # np.gradient uses src.res (pixel size in DEM native units); if the DEM
+        # were in degrees the slope values would be meaningless.
+        wgs84 = CRS.from_epsg(4326)
+        if not src.crs.equals(wgs84):
+            site_polygon = shape(transform_geom(wgs84, src.crs, mapping(site_polygon)))
+
         # Mask to Parcel
         out_image, out_transform = rasterio.mask.mask(src, [site_polygon], crop=True)
         elevation_data = out_image[0]
@@ -62,9 +73,9 @@ def calculate_slope_stability(parcel_geojson, dem_path):
         
         # Classification
         # Using Max Slope as conservative metric
-        if max_slope > 15.0:
+        if max_slope > 16.0:
             status = "SUSCEPTIBLE"
-        elif max_slope > 5.0:
+        elif max_slope > 14.0:
             status = "FLAG FOR REVIEW"
         else:
             status = "SAFE"

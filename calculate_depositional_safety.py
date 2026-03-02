@@ -1,6 +1,8 @@
 import rasterio
 import rasterio.mask
 import numpy as np
+from rasterio.crs import CRS
+from rasterio.warp import transform_geom
 from shapely.geometry import shape, Point, mapping
 from shapely.ops import transform
 import json
@@ -19,10 +21,18 @@ def calculate_depositional_safety(parcel_geojson, dem_path, search_buffer_meters
     """
 
     # 1. Parse Geometry
+    # GeoJSON spec (RFC 7946) mandates WGS84 (EPSG:4326).
     site_polygon = shape(parcel_geojson['geometry'])
 
     # Open DEM
     with rasterio.open(dem_path) as src:
+
+        # Reproject input polygon to DEM CRS if needed.
+        # IfSAR DEMs are typically in a projected CRS (e.g. UTM); buffering in
+        # degrees instead of metres produces wildly wrong vicinity radii.
+        wgs84 = CRS.from_epsg(4326)
+        if not src.crs.equals(wgs84):
+            site_polygon = shape(transform_geom(wgs84, src.crs, mapping(site_polygon)))
 
         # --- STEP A: Analyze the Site (Parcel) ---
         # Mask DEM to exactly the parcel boundaries to find the Site's lowest point
