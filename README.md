@@ -1,56 +1,124 @@
 # EIL-Calc: Earthquake-Induced Landslide Calculator
 
-**EIL-Calc** is a headless geoprocessing engine designed to automate the certification of Earthquake-Induced Landslide (EIL) hazards for individual land parcels. It serves as a backend service that abstracts DEM data acquisition and runs compliance-grade geometric algorithms.
-
-## Features
-
-- **Smart Data Fetcher:** Prioritizes local, high-resolution IfSAR (5m) data and falls back to SRTM 30m if unavailable.
-- **Compliance Module (Phase 1):**
-    - **Slope Stability:** Calculates maximum gradient to flag SAFE vs. SUSCEPTIBLE zones.
-    - **Depositional Safety:** Analyzes runout zones using the geometric shadow angle separation (H > 3 * Delta_E).
-- **Hybrid Architecture (Phase 2 - Planned):** Future integration of Physically-Guided ML (Landlab + XGBoost). See RFC for details.
-- **Orchestrator:** Single entry-point for managing the full assessment pipeline.
+EIL-Calc is a headless Python geoprocessing engine that automates Earthquake-Induced Landslide (EIL) hazard certification for land parcels. It accepts a GeoJSON polygon, resolves the best available DEM (IfSAR 5m or SRTM 30m), and runs two Phase 1 compliance algorithms — slope stability and depositional runout — producing a structured JSON verdict.
 
 ## Installation
 
-This project uses `uv` for dependency management.
+Requires Python 3.11+. Uses `uv` for dependency management.
 
 ```bash
-# Install uv (if not installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Clone repository
-git clone https://github.com/alfieprojectsdev/eil-calc.git
-cd eil-calc
-
-# Install dependencies
 uv sync
 ```
 
-## Usage
+The `eil-calc` console script is registered automatically after `uv sync`.
 
-### Running Tests
-Verify the installation and logic:
+> **Drive dependency:** Live runs require the `Backup Plus` external drive mounted at `/run/media/finch/Backup Plus/`. Unit tests and integration tests using the bundled fixture do not.
 
-```bash
-uv run python -m unittest test_orchestrator.py
-uv run python -m unittest test_eil_calc.py
+## Data requirements
+
+The `SmartFetcher` resolves DEMs in priority order:
+
+| Priority | Source | Path on drive |
+|---|---|---|
+| 1 | IfSAR 5m (preferred) | `Backup Plus/eil-calc/IfSAR/IfSAR_PH.tif` |
+| 2 | SRTM 30m (fallback) | `Backup Plus/eil-calc/SRTM/SRTM30m.tif` |
+
+Both are single nationwide GeoTIFFs covering the Philippines. If neither file is accessible, the engine raises `FileNotFoundError` with the expected paths.
+
+## CLI usage
+
+```
+eil-calc --geojson <path> --project-id <id> [--mode compliance|research] [--output <path>]
 ```
 
-### Running the Orchestrator (Example)
-You can run the orchestrator script directly to see a mock assessment:
+The `--geojson` file must be a GeoJSON Feature or bare Polygon geometry in WGS84. `--output` defaults to stdout.
+
+```bash
+eil-calc --geojson parcel.geojson --project-id LOT-2024-001 --mode compliance
+```
+
+## Output format
+
+```json
+{
+  "project_id": "LOT-2024-001",
+  "data_source": "ifsar",
+  "phase_1_compliance": {
+    "slope_stability": {
+      "metrics": { "max_slope_degrees": 12.4, "avg_slope_degrees": 8.1 },
+      "assessment": { "status": "FLAG FOR REVIEW", "threshold_used": "10–15°" }
+    },
+    "depositional_hazard": {
+      "metrics": {
+        "elevation_peak": 480.0,
+        "elevation_site": 310.0,
+        "delta_e": 170.0,
+        "horizontal_distance_h": 620.0,
+        "required_runout_3x": 510.0
+      },
+      "assessment": { "status": "SAFE (Beyond Runout)", "is_compliant": true }
+    },
+    "overall_status": "MANUAL REVIEW REQUIRED"
+  },
+  "phase_2_scientific": null,
+  "final_decision": "PENDING"
+}
+```
+
+`overall_status` is one of `CERTIFIED SAFE`, `MANUAL REVIEW REQUIRED`, or `NOT CERTIFIED`.
+
+Slope status thresholds: `SAFE` (< 10°), `FLAG FOR REVIEW` (10–15°), `SUSCEPTIBLE` (≥ 15°).
+
+Depositional check: the parcel is `PRONE (Within Runout Zone)` if `H < 3 × ΔE`.
+
+## Running tests
+
+**Unit tests** (no drive required):
+
+```bash
+uv run python -m unittest test_eil_calc test_orchestrator -v
+```
+
+**Integration tests** (require `test_fixtures/ifsar_tile.tif`):
+
+```bash
+uv run python -m pytest test_integration.py -v
+```
+
+The fixture is a 30 m × 30 m IfSAR tile from the Bukidnon highlands, Mindanao. If it is missing the tests skip automatically.
+
+**Manual smoke test** (requires `Backup Plus` drive):
 
 ```bash
 uv run python orchestrator.py
 ```
 
-## Project Structure
+## Project structure
 
-- `orchestrator.py`: Main entry point.
-- `smart_fetcher.py`: Data abstraction layer.
-- `slope_stability.py`: Core logic for slope hazards.
-- `calculate_depositional_safety.py`: Core logic for depositional/runout hazards.
-- `RFC_001-EIL-CALC.md`: Technical Specifications, ADRs, and RFC documentation.
+```
+eil-calc/
+├── cli.py                          # Argparse entry point (eil-calc script)
+├── orchestrator.py                 # Pipeline coordinator (EILOrchestrator)
+├── eil_types.py                    # TypedDicts + DEMContext dataclass
+├── smart_fetcher.py                # DEM resolution: IfSAR → SRTM
+├── slope_stability.py              # Gradient analysis, 3-tier threshold
+├── calculate_depositional_safety.py # Geometric runout check (H > 3 × ΔE)
+├── hybrid_engine.py                # Phase 2 stub (Landlab + XGBoost)
+├── test_eil_calc.py                # Unit tests: depositional + slope logic
+├── test_orchestrator.py            # Unit tests: orchestrator wiring (mocked)
+├── test_integration.py             # Integration tests: real IfSAR tile
+├── test_fixtures/
+│   └── ifsar_tile.tif             # Extracted IfSAR tile (Bukidnon, Mindanao)
+├── pyproject.toml
+└── RFC_001-EIL-CALC.md            # Technical spec and ADRs
+```
+
+## Architecture notes
+
+EIL-Calc follows a **Pipe-and-Filter** architecture. The `EILOrchestrator` coordinates the pipeline: fetch DEM → reproject geometry → build `DEMContext` → run Phase 1 modules → aggregate verdict. CRS reprojection is centralised in the orchestrator; downstream modules receive a `DEMContext` with a geometry already in the DEM's native CRS.
+
+**Phase 2** (Landlab physically-based modelling + XGBoost hybrid engine) is planned but deferred. `hybrid_engine.py` is a non-functional stub.
 
 ## License
+
 Proprietary / Internal Use Only.
