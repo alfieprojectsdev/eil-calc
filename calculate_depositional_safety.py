@@ -1,6 +1,7 @@
 import math
 
 import rasterio
+import rasterio.features
 import rasterio.mask
 import numpy as np
 from pyproj import Geod
@@ -72,16 +73,76 @@ def compute_depositional_safety(
     xs, ys = rasterio.transform.xy(vic_transform, max_idx[0], max_idx[1])
     peak_point = Point(xs, ys)
 
-    # --- STEP C: Physics logic (H > 3 × Delta_E) ---
+    # --- STEP C: Physics logic (H > 3 × Delta_E) via Topographic Runout Routing ---
     delta_e = elev_peak_max - float(elev_site_min)
-    # h_distance must be in metres to compare against delta_e (also metres).
-    # For geographic CRS, use geodetic distance via pyproj; for projected, use Euclidean.
-    if dataset.crs and dataset.crs.is_geographic:
-        geod = Geod(ellps="WGS84")
-        _, _, h_distance = geod.inv(site_point.x, site_point.y, peak_point.x, peak_point.y)
-        h_distance = float(h_distance)
+    
+    # We need a boolean mask of the parcel inside the vicinity grid
+    parcel_mask_vic = rasterio.features.geometry_mask(
+        [geometry],
+        out_shape=vic_elevations.shape,
+        transform=vic_transform,
+        invert=True
+    )
+    
+    geod = Geod(ellps="WGS84") if (dataset.crs and dataset.crs.is_geographic) else None
+
+    # Path routing (Steepest Descent)
+    curr_r, curr_c = max_idx
+    h_distance = 0.0
+    visited = set()
+    transect = []
+
+    while not parcel_mask_vic[curr_r, curr_c]:
+        visited.add((curr_r, curr_c))
+        
+        # save transect point
+        curr_x, curr_y = rasterio.transform.xy(vic_transform, curr_r, curr_c)
+        transect.append({"dist_m": round(h_distance, 1), "elev_m": round(float(vic_elevations[curr_r, curr_c]), 1)})
+        
+        min_elev = vic_elevations[curr_r, curr_c]
+        next_r, next_c = curr_r, curr_c
+        
+        for dr in [-1, 0, 1]:
+            for dc in [-1, 0, 1]:
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = len(vic_elevations) and curr_r + dr, curr_c + dc
+                if 0 <= nr < vic_elevations.shape[0] and 0 <= nc < vic_elevations.shape[1]:
+                    if (nr, nc) in visited:
+                        continue
+                        
+                    elev = vic_elevations[nr, nc]
+                    if elev != dataset.nodata and elev < min_elev:
+                        min_elev = elev
+                        next_r, next_c = nr, nc
+                        
+        if next_r == curr_r and next_c == curr_c:
+            # Trapped in a local bowl or flat area before reaching the parcel.
+            break
+
+        next_x, next_y = rasterio.transform.xy(vic_transform, next_r, next_c)
+        if geod:
+            _, _, step_dist = geod.inv(curr_x, curr_y, next_x, next_y)
+        else:
+            step_dist = math.hypot(next_x - curr_x, next_y - curr_y)
+            
+        h_distance += float(step_dist)
+        curr_r, curr_c = next_r, next_c
+
+    # If trapped, we compute the remaining distance from trap to site_point
+    if not parcel_mask_vic[curr_r, curr_c]:
+        trap_x, trap_y = rasterio.transform.xy(vic_transform, curr_r, curr_c)
+        if geod:
+            _, _, trap_dist = geod.inv(trap_x, trap_y, site_point.x, site_point.y)
+        else:
+            trap_dist = math.hypot(site_point.x - trap_x, site_point.y - trap_y)
+            
+        h_distance += float(trap_dist)
+        transect.append({"dist_m": round(h_distance, 1), "elev_m": round(float(elev_site_min), 1)})
     else:
-        h_distance = float(site_point.distance(peak_point))
+        # Reached the parcel gracefully
+        transect.append({"dist_m": round(h_distance, 1), "elev_m": round(float(vic_elevations[curr_r, curr_c]), 1)})
+
     required_runout = 3.0 * delta_e
 
     if h_distance > required_runout:
@@ -103,6 +164,7 @@ def compute_depositional_safety(
             status=status,
             is_compliant=is_compliant,
         ),
+        _viz_transect=transect,
     )
 
 

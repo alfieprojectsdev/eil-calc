@@ -24,6 +24,8 @@ class SlopeAssessment(TypedDict):
 class SlopeResult(TypedDict):
     metrics: SlopeMetrics
     assessment: SlopeAssessment
+    _viz_grid: list[list[float]]
+
 
 
 class DepositionalMetrics(TypedDict):
@@ -42,6 +44,8 @@ class DepositionalAssessment(TypedDict):
 class DepositionalResult(TypedDict):
     metrics: DepositionalMetrics
     assessment: DepositionalAssessment
+    _viz_transect: list[dict]
+
 
 
 # ---------------------------------------------------------------------------
