@@ -37,6 +37,16 @@ The `--geojson` file must be a GeoJSON Feature or bare Polygon geometry in WGS84
 eil-calc --geojson parcel.geojson --project-id LOT-2024-001 --mode compliance
 ```
 
+## Frontend Integration (EIL-Viz)
+
+To serve the physical engine for real-time use by the React web application:
+
+```bash
+uv run uvicorn api:app --port 8000
+```
+
+Once running, you can paste GeoJSON polygons directly into the `eil-viz` web UI and click **Run Assessment** to interactively visualize the topological grids.
+
 ## Output format
 
 ```json
