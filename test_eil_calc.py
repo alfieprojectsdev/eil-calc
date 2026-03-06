@@ -14,15 +14,25 @@ class TestEILTools(unittest.TestCase):
 
     def create_synthetic_dem(self, peak_location, peak_elev, site_elev):
         """Creates a 100x100 pixel DEM in memory.
-
-        Background is 0 m.  Site area (pixels 10-20 x 10-20) is set to
-        ``site_elev``.  One specific pixel is set to ``peak_elev``.
+        
+        Creates a conical gradient radiating downwards from the peak so the 
+        uphill-walker can trace the path.
         Resolution: 1 metre/pixel.
         """
         data = np.zeros((100, 100), dtype=rasterio.float32)
-        data[10:20, 10:20] = site_elev
         px, py = peak_location
-        data[py, px] = peak_elev  # numpy is row(y), col(x)
+        
+        # Calculate roughly what slope is needed to hit site_elev from peak_elev at distance 50m
+        # (Assuming the site is around 50m away as in the tests).
+        drop_per_m = (peak_elev - site_elev) / 50.0 if peak_elev > site_elev else 0
+        
+        for y in range(100):
+            for x in range(100):
+                dist = math.hypot(x - px, y - py)
+                data[y, x] = max(0, peak_elev - (dist * drop_per_m))
+                
+        # Flatten the site area
+        data[10:20, 10:20] = site_elev
         transform = from_origin(0, 100, 1, 1)  # West, North, Xres, Yres
         return data, transform
 

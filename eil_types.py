@@ -44,7 +44,7 @@ class DepositionalAssessment(TypedDict):
 class DepositionalResult(TypedDict):
     metrics: DepositionalMetrics
     assessment: DepositionalAssessment
-    _viz_transect: list[dict]
+    _viz_transects: list[dict]
 
 
 
