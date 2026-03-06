@@ -1,6 +1,6 @@
 # EIL-Calc: Earthquake-Induced Landslide Calculator
 
-EIL-Calc is a headless Python geoprocessing engine that automates Earthquake-Induced Landslide (EIL) hazard certification for land parcels. It accepts a GeoJSON polygon, resolves the best available DEM (IfSAR 5m or SRTM 30m), and runs two Phase 1 compliance algorithms — slope stability and depositional runout — producing a structured JSON verdict.
+EIL-Calc is a headless Python geoprocessing engine that automates Earthquake-Induced Landslide (EIL) hazard certification for land parcels. It accepts a GeoJSON polygon, resolves the best available DEM (IfSAR 5m or SRTM 30m), and runs two Phase 1 topography-aware compliance algorithms — geomorphological slope stability and steepest-descent depositional runout — producing a structured JSON verdict.
 
 ## Installation
 
@@ -37,6 +37,16 @@ The `--geojson` file must be a GeoJSON Feature or bare Polygon geometry in WGS84
 eil-calc --geojson parcel.geojson --project-id LOT-2024-001 --mode compliance
 ```
 
+## Frontend Integration (EIL-Viz)
+
+To serve the physical engine for real-time use by the React web application:
+
+```bash
+uv run uvicorn api:app --port 8000
+```
+
+Once running, you can paste GeoJSON polygons directly into the `eil-viz` web UI and click **Run Assessment** to interactively visualize the topological grids.
+
 ## Output format
 
 ```json
@@ -46,7 +56,11 @@ eil-calc --geojson parcel.geojson --project-id LOT-2024-001 --mode compliance
   "phase_1_compliance": {
     "slope_stability": {
       "metrics": { "max_slope_degrees": 12.4, "avg_slope_degrees": 8.1 },
-      "assessment": { "status": "FLAG FOR REVIEW", "threshold_used": "10–15°" }
+      "assessment": { "status": "FLAG FOR REVIEW", "threshold_used": "10–15°" },
+      "_viz_grid": [
+        [null, 6.2, 8.4],
+        [null, null, 12.4]
+      ]
     },
     "depositional_hazard": {
       "metrics": {
@@ -56,7 +70,11 @@ eil-calc --geojson parcel.geojson --project-id LOT-2024-001 --mode compliance
         "horizontal_distance_h": 620.0,
         "required_runout_3x": 510.0
       },
-      "assessment": { "status": "SAFE (Beyond Runout)", "is_compliant": true }
+      "assessment": { "status": "SAFE (Beyond Runout)", "is_compliant": true },
+      "_viz_transect": [
+        {"dist_m": 0.0, "elev_m": 480.0},
+        {"dist_m": 620.0, "elev_m": 310.0}
+      ]
     },
     "overall_status": "MANUAL REVIEW REQUIRED"
   },
@@ -101,8 +119,8 @@ eil-calc/
 ├── orchestrator.py                 # Pipeline coordinator (EILOrchestrator)
 ├── eil_types.py                    # TypedDicts + DEMContext dataclass
 ├── smart_fetcher.py                # DEM resolution: IfSAR → SRTM
-├── slope_stability.py              # Gradient analysis, 3-tier threshold
-├── calculate_depositional_safety.py # Geometric runout check (H > 3 × ΔE)
+├── slope_stability.py              # Gradient analysis + Dynamic Slope Units (SUs)
+├── calculate_depositional_safety.py # Topographic runout check (Steepest-descent H > 3 × ΔE)
 ├── hybrid_engine.py                # Phase 2 stub (Landlab + XGBoost)
 ├── test_eil_calc.py                # Unit tests: depositional + slope logic
 ├── test_orchestrator.py            # Unit tests: orchestrator wiring (mocked)
@@ -116,6 +134,8 @@ eil-calc/
 ## Architecture notes
 
 EIL-Calc follows a **Pipe-and-Filter** architecture. The `EILOrchestrator` coordinates the pipeline: fetch DEM → reproject geometry → build `DEMContext` → run Phase 1 modules → aggregate verdict. CRS reprojection is centralised in the orchestrator; downstream modules receive a `DEMContext` with a geometry already in the DEM's native CRS.
+
+Currently, **Phase 1** uses physical "zeroth-order" algorithms built natively on topological math (e.g. Scipy spatial smoothing for 5m micro-resolutions, `skimage` watershed segmentations for natural geomorphological Slope Units, and steepest-descent path routing for runout metrics).
 
 **Phase 2** (Landlab physically-based modelling + XGBoost hybrid engine) is planned but deferred. `hybrid_engine.py` is a non-functional stub.
 
