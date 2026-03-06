@@ -1,6 +1,6 @@
 # EIL-Calc / EIL-Viz — Context Handover
 
-Current as of **2026-03-06**.
+Current as of **2026-03-06** (post-merge, master).
 Primary map for orienting before any implementation work.
 
 ---
@@ -113,7 +113,10 @@ Requires the **Backup Plus** external drive mounted at
 5. **Parcel mask** (`rasterio.features.geometry_mask`, original unbuffered geometry,
    `out_transform` from the 500 m buffered extraction).
 
-6. **Metrics**: `np.nanmax` / `np.nanmean` over `slope_degrees[su_mask & valid_mask]`.
+6. **Metrics**: `np.nanmax` / `np.nanmean` over `slope_degrees[su_mask & parcel_mask & valid_mask]`.
+   `su_mask` selects which drainage basins are hydrologically relevant; `parcel_mask` clips
+   the actual metric to pixels inside the lot boundary. Without `parcel_mask` the full basin
+   (potentially 500 m out) feeds the metric, producing false SUSCEPTIBLE verdicts.
 
 7. **`_viz_grid`**: Full slope array from the buffered extraction, with all pixels
    outside the original parcel set to `None`. Row-major 2D list for JSON serialisation.
@@ -125,13 +128,16 @@ Requires the **Backup Plus** external drive mounted at
 **Uphill Walker → Downhill Stepper → Top-3 Transects → Worst-Case Status**
 
 **Step A — Site** (`rasterio.mask.mask` on parcel geometry):
-Site elevation = minimum valid elevation inside the parcel.
+Band extracted as `float64`; nodata pixels NaN-replaced (`np.nan`) before any arithmetic.
+Site elevation = `np.nanmin` of valid pixels inside the parcel.
 Site point = pixel coordinates of that minimum, converted via `rasterio.transform.xy`.
 
 **Step B — Vicinity** (1 000 m search buffer):
-Full 1 km² area extracted; geographic CRS buffer:
-`search_buffer = search_buffer_meters / (111320 * cos(lat_rad))`.
+Full 1 km² area extracted as `float64`; nodata NaN-replaced immediately.
+Geographic CRS buffer: `search_buffer = search_buffer_meters / (111320 * cos(lat_rad))`.
 Parcel boolean mask (`parcel_mask_vic`) projected into the vicinity grid.
+All nodata guards in the inner loops use `np.isnan()` — not `== dataset.nodata` —
+because float32/float64 exact equality fails silently at INT32_MAX values (IfSAR nodata).
 
 **Step C.1 — Uphill Walker** (reverse gradient ascent from each parcel boundary pixel):
 - 8-directional greedy ascent.
@@ -146,6 +152,9 @@ Parcel boolean mask (`parcel_mask_vic`) projected into the vicinity grid.
 - Geodetic distance: `pyproj.Geod.inv()` for geographic CRS; Euclidean otherwise.
 
 **Step C.2 — Downhill Stepper** (per unique peak):
+- **Entry guard**: peaks whose pixel is already inside the parcel are skipped before the
+  loop — they would produce `h_distance=0`, empty `transect`, and `threat_ratio=inf`,
+  sorting to the top of the ranking and propagating a broken path to the frontend.
 - Greedy descent: at each step takes the steepest downhill unvisited 8-neighbour.
 - Accumulates `h_distance` step-by-step using `Geod.inv()` (geographic) or `hypot`
   (projected).
@@ -272,11 +281,14 @@ npm run dev   # → http://localhost:5173
 | Rule | Where enforced |
 |---|---|
 | Input geometry always WGS84 | Orchestrator reprojects once before building `DEMContext`; no module does CRS logic |
-| Worst-case master status | `calculate_depositional_safety.py` line 293; UI header ignores `selectedPathIndex` |
+| Slope metrics clipped to parcel, not full SU basin | `slope_stability.py` — `su_mask & parcel_mask & valid_mask` |
+| Nodata → NaN before gradient (slope) | `slope_stability.py` — prevents INT32_MAX sentinel producing 90° artefacts |
+| Nodata → NaN before walker/stepper (depositional) | `calculate_depositional_safety.py` Steps A & B — float32 exact equality fails at INT32_MAX |
+| Peaks inside parcel skipped before downhill loop | `calculate_depositional_safety.py` — prevents `h_distance=0`, empty transect, `threat_ratio=inf` |
+| Worst-case master status | `calculate_depositional_safety.py`; UI header ignores `selectedPathIndex` |
 | `_viz_grid` null = outside parcel | `slope_stability.py`: `viz_grid[~parcel_mask] = np.nan` then serialised as `None` |
-| `_viz_transects` sorted by threat_ratio desc | `calculate_depositional_safety.py` line 265 |
+| `_viz_transects` sorted by threat_ratio desc | `calculate_depositional_safety.py` |
 | Drive absent → HTTP 503, not 500 | `api.py` catches `FileNotFoundError` separately |
-| Nodata → NaN before gradient | `slope_stability.py` — prevents INT32_MAX sentinel from producing 90° artefacts |
 
 ---
 
@@ -284,9 +296,8 @@ npm run dev   # → http://localhost:5173
 
 | Item | Priority | Notes |
 |---|---|---|
-| `generate_gt_ledger.py` | Medium | Purpose unclear — not yet reviewed |
-| Ground truth data collection | High | Need to run `generate_mock_parcels.py` against live PHIVOLCS endpoint and verify pixel classifications |
-| `test_integration.py` ground-truth values | Medium | May need updating after Gaussian smoothing + SU changes altered slope metrics |
+| Ground truth data collection | High | Run `generate_mock_parcels.py --type slope -u <username>` against live PHIVOLCS endpoint; verify pixel classifications before treating confusion matrix results as meaningful |
+| `generate_gt_ledger.py` | Medium | Generates `gt_parcel_ledger.csv`; purpose is tracking per-parcel ground-truth results across runs — review before next data collection pass |
 | Phase 2: Landlab + XGBoost | Deferred | `hybrid_engine.py` is a stub |
 | HTTP API pagination / project-id lookup | Deferred | Currently stateless per-request |
 | `SmartFetcher` tile-aware lookup | Deferred | Currently serves entire nationwide GeoTIFF; no tile splitting |
