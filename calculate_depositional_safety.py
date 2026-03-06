@@ -50,17 +50,19 @@ def compute_depositional_safety(
     """
     # --- STEP A: Analyse the site (parcel) ---
     site_img, site_transform = rasterio.mask.mask(dataset, [geometry], crop=True)
-    site_elevations = site_img[0]  # Band 1
+    site_elevations = site_img[0].astype(float)  # Band 1
+    if dataset.nodata is not None:
+        site_elevations[site_elevations == dataset.nodata] = np.nan
 
-    site_valid_elevs = site_elevations[site_elevations != dataset.nodata]
+    site_valid_elevs = site_elevations[~np.isnan(site_elevations)]
     if len(site_valid_elevs) == 0:
         return {"error": "No valid elevation data found inside parcel geometry"}
 
     # Site elevation = lowest point in the lot.
-    elev_site_min = np.min(site_valid_elevs)
+    elev_site_min = np.nanmin(site_valid_elevs)
 
     # Coordinates of the minimum-elevation pixel.
-    min_idx = np.unravel_index(np.argmin(site_elevations), site_elevations.shape)
+    min_idx = np.unravel_index(np.nanargmin(site_elevations), site_elevations.shape)
     site_min_xy = rasterio.transform.xy(site_transform, min_idx[0], min_idx[1])
     site_point = Point(site_min_xy)
 
@@ -77,9 +79,11 @@ def compute_depositional_safety(
     vicinity_img, vic_transform = rasterio.mask.mask(
         dataset, [vicinity_polygon], crop=True
     )
-    vic_elevations = vicinity_img[0]
-    vic_valid_elevs = vic_elevations[vic_elevations != dataset.nodata]
-    
+    vic_elevations = vicinity_img[0].astype(float)
+    if dataset.nodata is not None:
+        vic_elevations[vic_elevations == dataset.nodata] = np.nan
+
+    vic_valid_elevs = vic_elevations[~np.isnan(vic_elevations)]
     if len(vic_valid_elevs) == 0:
         return {"error": "No valid elevation data found in vicinity"}
 
@@ -123,7 +127,7 @@ def compute_depositional_safety(
                         continue
                         
                     neighbor_elev = vic_elevations[nr, nc]
-                    if neighbor_elev == dataset.nodata:
+                    if np.isnan(neighbor_elev):
                         continue
                     
                     diff = neighbor_elev - curr_elev
@@ -147,7 +151,7 @@ def compute_depositional_safety(
                                 continue
                             
                             neighbor_elev = vic_elevations[nr, nc]
-                            if neighbor_elev != dataset.nodata and neighbor_elev > max_regional_elev:
+                            if not np.isnan(neighbor_elev) and neighbor_elev > max_regional_elev:
                                 max_regional_elev = neighbor_elev
                                 window_r, window_c = nr, nc
                 
@@ -178,6 +182,11 @@ def compute_depositional_safety(
     parcel_inv_mask = ~parcel_mask_vic  # True = Outside, False = Inside
     
     for peak_r, peak_c in peak_paths:
+        # Skip peaks that landed inside the parcel — the downhill stepper would
+        # never enter its loop, producing h_distance=0 and an empty transect list.
+        if not parcel_inv_mask[peak_r, peak_c]:
+            continue
+
         curr_r, curr_c = peak_r, peak_c
         elev_peak_max = float(vic_elevations[peak_r, peak_c])
         delta_e = elev_peak_max - float(elev_site_min)
@@ -210,7 +219,7 @@ def compute_depositional_safety(
                             continue
                             
                         elev = vic_elevations[nr, nc]
-                        if elev != dataset.nodata and elev < min_elev:
+                        if not np.isnan(elev) and elev < min_elev:
                             min_elev = elev
                             next_r, next_c = nr, nc
                             

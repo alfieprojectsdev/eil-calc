@@ -16,14 +16,14 @@ Ground-truth values recorded from tile extraction (2026-03-02):
     Elev:   1631 m – 2587 m
 
     Test parcel: 30 m × 30 m centred at lon=124.894914, lat=8.104633
-    Slope (code behaviour — WGS84 resolution used as spacing):
-        max_slope_degrees ≈ 90.0  (SUSCEPTIBLE)
-    Depositional:
-        elevation_peak  = 2587.0 m
+    Slope:
+        max_slope_degrees > 0  (SUSCEPTIBLE — steep highland terrain)
+    Depositional (multi-peak Uphill Walker + Downhill Stepper, nodata NaN-masked):
+        elevation_peak  = 2471.0 m  (nearest reachable ridge within 1 km buffer)
         elevation_site  = 2427.0 m
-        delta_e         = 160.0 m
-        required_runout = 480.0 m
-        h_distance      ≈ 0.0045 m  → PRONE (Within Runout Zone)
+        delta_e         = 44.0 m
+        required_runout = 132.0 m
+        h_distance      ≈ 42.5 m  → PRONE (ridge immediately abuts parcel)
     Overall: NOT CERTIFIED
 """
 import os
@@ -133,17 +133,17 @@ class TestIntegrationDepositional(unittest.TestCase):
         self.assertIn("metrics", result)
         self.assertIn("assessment", result)
 
-    def test_depositional_status_is_safe(self):
-        """Bukidnon parcel is beyond the runout zone — must be SAFE (h=1063m > 3×168m=504m)."""
+    def test_depositional_status_is_prone(self):
+        """Bukidnon parcel sits immediately below a ridge — must be PRONE (h≈42m < 3×44m=132m)."""
         result = compute_depositional_safety(
             self.parcel_geom, self.dataset, search_buffer_meters=1000
         )
 
         status = result["assessment"]["status"]
         self.assertIn(
-            "SAFE",
+            "PRONE",
             status,
-            msg=f"Expected SAFE status for beyond-runout parcel, got {status!r}",
+            msg=f"Expected PRONE status for ridge-adjacent parcel, got {status!r}",
         )
 
     def test_depositional_metrics_ground_truth(self):
@@ -153,10 +153,10 @@ class TestIntegrationDepositional(unittest.TestCase):
         )
 
         m = result["metrics"]
-        self.assertAlmostEqual(m["elevation_peak"], 2587.0, places=0)
+        self.assertAlmostEqual(m["elevation_peak"], 2471.0, places=0)
         self.assertAlmostEqual(m["elevation_site"], 2427.0, places=0)
-        self.assertAlmostEqual(m["delta_e"], 160.0, places=0)
-        self.assertAlmostEqual(m["required_runout_3x"], 480.0, places=0)
+        self.assertAlmostEqual(m["delta_e"], 44.0, places=0)
+        self.assertAlmostEqual(m["required_runout_3x"], 132.0, places=0)
         print(
             f"\nDepositional: peak={m['elevation_peak']:.1f}m  "
             f"site={m['elevation_site']:.1f}m  "

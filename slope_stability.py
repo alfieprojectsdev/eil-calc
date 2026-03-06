@@ -99,8 +99,10 @@ def compute_slope_stability(geometry: BaseGeometry, dataset) -> SlopeResult | di
     else:
         su_mask = parcel_mask  # Fallback if the watershed is totally flat
         
-    # Evaluate slope constraints strictly within the natural slope unit
-    site_slopes = slope_degrees[su_mask & valid_mask]
+    # Evaluate slope constraints within the SU basins, clipped to the parcel footprint.
+    # su_mask selects which drainage basins are hydrologically relevant; parcel_mask
+    # ensures the actual metric is computed only over pixels inside the lot boundary.
+    site_slopes = slope_degrees[su_mask & parcel_mask & valid_mask]
     site_slopes = site_slopes[~np.isnan(site_slopes)]
 
     if site_slopes.size == 0:
