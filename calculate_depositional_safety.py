@@ -69,7 +69,9 @@ def compute_depositional_safety(
 
     elev_peak_max = float(np.max(vic_valid_elevs))
 
-    max_idx = np.unravel_index(np.argmax(vic_elevations), vic_elevations.shape)
+    # Mask NoData values as -inf to prevent argmax from snapping to 32-bit integer limits
+    masked_vic = np.where(vic_elevations == dataset.nodata, -np.inf, vic_elevations)
+    max_idx = np.unravel_index(np.argmax(masked_vic), vic_elevations.shape)
     xs, ys = rasterio.transform.xy(vic_transform, max_idx[0], max_idx[1])
     peak_point = Point(xs, ys)
 
@@ -129,7 +131,6 @@ def compute_depositional_safety(
         h_distance += float(step_dist)
         curr_r, curr_c = next_r, next_c
 
-    # If trapped, we compute the remaining distance from trap to site_point
     if not parcel_mask_vic[curr_r, curr_c]:
         trap_x, trap_y = rasterio.transform.xy(vic_transform, curr_r, curr_c)
         if geod:
