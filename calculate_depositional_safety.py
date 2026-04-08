@@ -29,6 +29,12 @@ def get_boundary_pixels(mask_2d):
     return np.argwhere(inside_border)
 
 
+# Minimum horizontal runout distance for a transect to be considered a real threat.
+# Paths shorter than this are micro-topographic noise at IfSAR 5m resolution
+# (< 6 pixels), not genuine landslide source areas.
+_MIN_RUNOUT_METRES = 30.0
+
+
 def compute_depositional_safety(
     geometry: BaseGeometry,
     dataset,
@@ -246,6 +252,11 @@ def compute_depositional_safety(
             transect.append({"dist_m": round(h_distance, 1), "elev_m": round(float(elev_site_min), 1)})
         else:
             transect.append({"dist_m": round(h_distance, 1), "elev_m": round(float(vic_elevations[curr_r, curr_c]), 1)})
+
+        # Discard sub-pixel noise paths — a genuine landslide source must produce
+        # at least _MIN_RUNOUT_METRES of downhill travel before reaching the parcel.
+        if h_distance < _MIN_RUNOUT_METRES:
+            continue
 
         required_runout = 3.0 * delta_e
         is_compliant = h_distance > required_runout

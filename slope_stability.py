@@ -8,6 +8,7 @@ from shapely.geometry.base import BaseGeometry
 
 from skimage import feature, segmentation
 from eil_types import DEMContext, SlopeAssessment, SlopeMetrics, SlopeResult
+from eil_status import SLOPE_THRESHOLD_FLAG, SLOPE_THRESHOLD_SUSCEPTIBLE, SlopeStatus
 
 _CATCHMENT_BUFFER_METRES = 500.0
 
@@ -27,7 +28,7 @@ def compute_slope_stability(geometry: BaseGeometry, dataset) -> SlopeResult | di
         lat_rad = math.radians(geometry.centroid.y)
         py_m_deg = py * 111320.0
         px_m_deg = px * 111320.0 * math.cos(lat_rad)
-        buffer_dist = _CATCHMENT_BUFFER_METRES / 111320.0
+        buffer_dist = _CATCHMENT_BUFFER_METRES / (111320.0 * math.cos(lat_rad))
     else:
         py_m_deg, px_m_deg = py, px
         buffer_dist = _CATCHMENT_BUFFER_METRES
@@ -111,22 +112,30 @@ def compute_slope_stability(geometry: BaseGeometry, dataset) -> SlopeResult | di
     max_slope = float(np.nanmax(site_slopes))
     avg_slope = float(np.nanmean(site_slopes))
 
+    # Coverage fractions — fraction of parcel pixels exceeding each threshold.
+    # Using coverage rather than max_slope prevents isolated steep pixels (micro-
+    # topographic artefacts at IfSAR 5 m resolution) from condemning an otherwise
+    # flat parcel, and aligns with PHIVOLCS' "Largely/Partly" qualifier system.
+    pct_susceptible = float((site_slopes > SLOPE_THRESHOLD_SUSCEPTIBLE).mean())
+    pct_flag        = float(((site_slopes > SLOPE_THRESHOLD_FLAG) &
+                             (site_slopes <= SLOPE_THRESHOLD_SUSCEPTIBLE)).mean())
+
     # Mask the 2D gradient array to NaN where the pixel isn't inside the parcel bounds
     # (for the heatmap output).
     viz_grid = slope_degrees.copy()
     viz_grid[~parcel_mask] = np.nan
     viz_grid_list = np.where(np.isnan(viz_grid), None, viz_grid).tolist()
 
-    if max_slope > 16.0:
-        status = "SUSCEPTIBLE"
-    elif max_slope > 14.0:
-        status = "FLAG FOR REVIEW"
+    if pct_susceptible > 0.015:
+        status = SlopeStatus.SUSCEPTIBLE
+    elif pct_flag > 0.10:
+        status = SlopeStatus.FLAG
     else:
-        status = "SAFE"
+        status = SlopeStatus.SAFE
 
     return SlopeResult(
         metrics=SlopeMetrics(max_slope_degrees=max_slope, avg_slope_degrees=avg_slope),
-        assessment=SlopeAssessment(status=status, threshold_used="max_slope"),
+        assessment=SlopeAssessment(status=status, threshold_used="coverage_fraction"),
         _viz_grid=viz_grid_list,
     )
 
