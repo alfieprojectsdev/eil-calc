@@ -1,9 +1,9 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from shapely.geometry import shape
 
 from orchestrator import EILOrchestrator
@@ -27,13 +27,94 @@ app.add_middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# Request model
+# ---------------------------------------------------------------------------
+
 class AssessmentRequest(BaseModel):
     project_id: str
-    geometry: Dict[str, Any]
-    config: Dict[str, Any] = {"mode": "compliance"}
+    geometry: dict[str, Any]
+    config: dict[str, Any] = {"mode": "compliance"}
 
 
-@app.post("/api/v1/assess", response_model=Dict[str, Any])
+# ---------------------------------------------------------------------------
+# Response models
+# ---------------------------------------------------------------------------
+
+class ErrorResult(BaseModel):
+    error: str
+
+
+class SlopeMetricsResponse(BaseModel):
+    max_slope_degrees: float
+    avg_slope_degrees: float
+
+
+class SlopeAssessmentResponse(BaseModel):
+    status: str
+    threshold_used: str
+
+
+class SlopeStabilityResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    metrics: SlopeMetricsResponse
+    assessment: SlopeAssessmentResponse
+    viz_grid: list[list[Optional[float]]] = Field(alias="_viz_grid")
+
+
+class DepositionalMetricsResponse(BaseModel):
+    elevation_peak: float
+    elevation_site: float
+    delta_e: float
+    horizontal_distance_h: float
+    required_runout_3x: float
+
+
+class DepositionalAssessmentResponse(BaseModel):
+    status: str
+    is_compliant: bool
+
+
+class TransectPathPoint(BaseModel):
+    dist_m: float
+    elev_m: float
+
+
+class TransectResponse(BaseModel):
+    metrics: DepositionalMetricsResponse
+    assessment: DepositionalAssessmentResponse
+    path: list[TransectPathPoint]
+    threat_ratio: float
+
+
+class DepositionalHazardResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    metrics: DepositionalMetricsResponse
+    assessment: DepositionalAssessmentResponse
+    viz_transects: list[TransectResponse] = Field(alias="_viz_transects")
+
+
+class Phase1ComplianceResponse(BaseModel):
+    slope_stability: Union[SlopeStabilityResponse, ErrorResult]
+    depositional_hazard: Union[DepositionalHazardResponse, ErrorResult]
+    overall_status: str
+
+
+class AssessmentResponse(BaseModel):
+    project_id: str
+    data_source: str
+    phase_1_compliance: Phase1ComplianceResponse
+    phase_2_scientific: Optional[Any] = None
+    final_decision: str
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/api/v1/assess", response_model=AssessmentResponse, response_model_by_alias=True)
 def assess_parcel(request: AssessmentRequest):
     """
     Run the EIL hazard assessment on the provided GeoJSON polygon.
