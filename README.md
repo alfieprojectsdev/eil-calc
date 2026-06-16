@@ -127,6 +127,41 @@ where pixels are classified as susceptible (> 16°) or flag (14–16°) before c
 
 A parcel is `PRONE (Within Runout Zone)` if the steepest-descent horizontal distance `H < 3 × ΔE` (elevation drop from peak to site). Paths shorter than 30 m are discarded as sub-pixel noise. The top-3 highest-threat paths are returned in `_viz_transects`; `overall_status` reflects the worst-case path.
 
+## How the logic works (plain-language guide for reviewers)
+
+This section is for hazard assessors reviewing the *reasoning*, not the code. Each plain-language step is mapped to the exact source file and function so a developer can confirm the implementation matches the intent. Line numbers are approximate and may drift as the code evolves — the function names are the stable reference.
+
+The engine answers **two independent questions** about a parcel, then combines them:
+
+### Question 1 — "Is the ground inside the lot too steep?" (slope stability)
+
+| # | What it does, in plain terms | Where in code |
+|---|---|---|
+| 1 | Take the lot outline and a 500 m collar around it, and cut that patch out of the elevation map (DEM). The collar exists so slope near the lot's edge is measured against real neighbouring ground, not the empty map border. | `slope_stability.py` → `compute_slope_stability()`, buffer + crop |
+| 2 | Smooth the elevation map slightly to remove data spikes/noise, so a single bad pixel can't fake a cliff. | Gaussian smoothing block (`sigma = 2.0`, ≈ 30 m smoothing on 5 m IfSAR) |
+| 3 | Compute the slope angle (in degrees) at every pixel. | `np.gradient` → `slope_degrees` |
+| 4 | Divide the surrounding terrain into natural drainage basins (the way ridgelines separate one hillside catchment from the next) and keep only the basins the lot actually sits in. This stops a far-off mountain from being blamed for the lot. | "Dynamic Slope Unit" / watershed block |
+| 5 | Inside those relevant basins **and** inside the lot boundary, measure what fraction of the ground is steep: `> 16°` = *susceptible*, `14–16°` = *flag for review*. | coverage-fraction calculation (`pct_susceptible`, `pct_flag`) |
+| 6 | Decide: more than **1.5%** of the lot susceptible → **SUSCEPTIBLE**; else more than **10%** in the flag band → **FLAG FOR REVIEW**; otherwise **SAFE**. | final `if`/`elif`/`else` block; thresholds in `eil_status.py` |
+
+*Why fractions instead of the single steepest point:* one isolated steep pixel (often a data artefact at 5 m resolution) should not condemn an otherwise flat lot. Using coverage mirrors PHIVOLCS' own "Largely / Partly" qualifier language.
+
+### Question 2 — "Could a landslide from higher ground reach the lot?" (depositional runout)
+
+| # | What it does, in plain terms | Where in code |
+|---|---|---|
+| 1 | Find the **lowest point inside the lot** — treat it as where debris would arrive. | `calculate_depositional_safety.py` → `compute_depositional_safety()`, STEP A |
+| 2 | Look up to ~1 km around the lot and find the **highest peak** that could be a landslide source. | STEP B (vicinity buffer + peak search) |
+| 3 | Walk downhill from that peak, always following the steepest descent, until the path reaches the lot. Measure the **drop in height (ΔE)** and the **horizontal travel distance (H)** along that path. | uphill-walker / downhill-stepper routine |
+| 4 | Apply the runout rule: landslide debris is assumed able to travel up to **3× its fall height**. If the lot is *farther* than that (`H > 3 × ΔE`) it is **SAFE (Beyond Runout)**; if *closer* (`H < 3 × ΔE`) it is **PRONE (Within Runout Zone)**. | `required_runout = 3.0 * delta_e`; `is_compliant = h_distance > required_runout` |
+| 5 | Ignore any path shorter than **30 m** (too short to be a real slide at this map resolution), keep the **3 most threatening** source paths, and let the **worst one** decide the parcel's status. | `_MIN_RUNOUT_METRES`; top-3 sort; worst-case aggregation |
+
+*The "3× fall height" rule* is a standard landslide reach approximation (a travel/reach angle of roughly 18°): the steeper and higher the source, the farther debris can run out.
+
+### Putting it together
+
+The orchestrator (`orchestrator.py`) runs both questions on the same parcel and the status enums in `eil_status.py` combine them into the single `overall_status` shown in the output: **CERTIFIED SAFE**, **MANUAL REVIEW REQUIRED**, or **NOT CERTIFIED**. A reviewer disagreeing with any single step above can point to its row and the named function — that is the line that would change.
+
 ## Running tests
 
 **Unit tests** (no drive required):
