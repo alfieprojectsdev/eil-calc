@@ -48,8 +48,13 @@ def _find_on_removable(subpath: Path) -> str | None:
 
     for root in roots:
         candidate = root / subpath
-        if candidate.exists():
-            return str(candidate)
+        try:
+            if candidate.exists():
+                return str(candidate)
+        except OSError:
+            # Inaccessible mount root (e.g. another user's root-owned
+            # /run/media/<user> dir). Skip it rather than crash the scan.
+            continue
     return None
 
 
