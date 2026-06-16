@@ -25,7 +25,7 @@ The `SmartFetcher` resolves DEMs in priority order:
 
 Both are single nationwide GeoTIFFs covering the Philippines. Mount point is detected automatically:
 
-- **Linux:** scans `/run/media/<user>/Backup Plus/` and `/media/Backup Plus/`
+- **Linux:** scans `/run/media/<user>/Backup Plus/` and `/media/Backup Plus/`. Mount roots that are not readable (e.g. another user's root-owned `/run/media/root`) are skipped rather than aborting the scan.
 - **Windows:** scans all drive letters (A–Z) for the `eil-calc/` subpath
 
 Override paths via environment variables if the drive is mounted elsewhere:
@@ -121,7 +121,7 @@ The decision uses **coverage fraction** over the parcel's watershed slope units,
 | `pct_flag > 10%` (and not susceptible) | FLAG FOR REVIEW |
 | Otherwise | SAFE |
 
-where pixels are classified as susceptible (> 16°) or flag (14–16°) before computing the fraction.
+where pixels are classified as susceptible (> 16°) or flag (14–16°) before computing the fraction. The degree thresholds and status enum are centralised in `eil_status.py` (`SLOPE_THRESHOLD_FLAG = 14.0`, `SLOPE_THRESHOLD_SUSCEPTIBLE = 16.0`).
 
 ### Depositional check
 
@@ -159,6 +159,7 @@ eil-calc/
 ├── cli.py                          # Argparse entry point (eil-calc script)
 ├── orchestrator.py                 # Pipeline coordinator (EILOrchestrator)
 ├── eil_types.py                    # TypedDicts + DEMContext dataclass
+├── eil_status.py                   # Slope/depositional status enums + degree thresholds
 ├── smart_fetcher.py                # DEM resolution: IfSAR → SRTM (cross-platform)
 ├── slope_stability.py              # Gradient analysis + Dynamic Slope Units (SUs)
 ├── calculate_depositional_safety.py # Topographic runout check (Steepest-descent H > 3 × ΔE)
