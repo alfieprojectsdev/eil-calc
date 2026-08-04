@@ -4,9 +4,11 @@ from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from shapely.geometry import shape
 
+from health import DemProbe
 from orchestrator import EILOrchestrator
 from settings import get_settings
 from smart_fetcher import SmartFetcher
@@ -31,6 +33,9 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(fetcher.describe_failure())
     path, source_type = resolved
     logger.info("DEM resolved at startup: %s (%s)", path, source_type)
+    # /readyz reports what startup resolved rather than re-deriving it, so the
+    # two answers cannot drift apart.
+    app.state.dem_probe = DemProbe(path=path, source_type=source_type)
     yield
 
 
@@ -135,6 +140,60 @@ class AssessmentResponse(BaseModel):
     phase_1_compliance: Phase1ComplianceResponse
     phase_2_scientific: Optional[Any] = None
     final_decision: str
+
+
+# ---------------------------------------------------------------------------
+# Operational endpoints
+#
+# Excluded from the OpenAPI schema: these are for the proxy and the init
+# system, not part of the assessment contract ADR-002 governs.
+# ---------------------------------------------------------------------------
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    """Liveness — is this process up and is the event loop still turning?
+
+    Deliberately touches nothing external: no filesystem, no DEM. Whatever
+    consumes this (systemd `Restart=on-failure`, a container liveness probe)
+    should only ever be told "this process is wedged, restart it" — never
+    "a mount you do not control went away", which restarting cannot fix.
+    """
+    return {"status": "ok"}
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz():
+    """Readiness — should the proxy send this instance real traffic?
+
+    A strictly stronger question than liveness, and here it means one thing:
+    is the DEM readable *right now*. `/srv/eil-data` is a separate LV mounted
+    `nofail`, so it can vanish under a long-running process; that is exactly
+    the case this exists to catch.
+
+    Returns 503 rather than raising, so the reason is visible in `curl` output
+    and in the nginx error log.
+    """
+    probe = getattr(app.state, "dem_probe", None)
+    if probe is None:
+        # Only reachable if startup has not finished — the lifespan hook either
+        # sets this or refuses to start the process at all.
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not ready", "reason": "startup has not completed"},
+        )
+
+    result = await probe.check()
+    if not result.ready:
+        logger.warning("Readiness check failed: %s", result.reason)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not ready", "reason": result.reason},
+        )
+
+    return {
+        "status": "ready",
+        "dem": {"path": probe.path, "source": probe.source_type},
+    }
 
 
 # ---------------------------------------------------------------------------
