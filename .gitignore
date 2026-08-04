@@ -49,3 +49,7 @@ archive/
 # Scratch working dirs (local only)
 temp/
 srtm/
+
+# Backups of .env carry the same plaintext credential — never track them.
+.env.bak*
+.env.local
