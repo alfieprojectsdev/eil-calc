@@ -46,3 +46,6 @@ archive/
 
 # Binary RFC export (markdown RFC_001-EIL-CALC.md is the tracked source)
 *.docx
+# Scratch working dirs (local only)
+temp/
+srtm/

@@ -1,4 +1,5 @@
 import logging
+from contextlib import asynccontextmanager
 from typing import Any, Optional, Union
 
 from fastapi import FastAPI, HTTPException
@@ -7,24 +8,50 @@ from pydantic import BaseModel, ConfigDict, Field
 from shapely.geometry import shape
 
 from orchestrator import EILOrchestrator
+from settings import get_settings
+from smart_fetcher import SmartFetcher
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+settings = get_settings()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Resolve the DEM once, at startup, and refuse to start without one.
+
+    A misconfigured DEM path is a deployment error, not a per-request error.
+    Failing here surfaces it in `systemctl status` on the first start, instead
+    of as a 503 the first time an assessor submits a parcel.
+    """
+    fetcher = SmartFetcher()
+    resolved = fetcher.resolved_source()
+    if resolved is None:
+        raise RuntimeError(fetcher.describe_failure())
+    path, source_type = resolved
+    logger.info("DEM resolved at startup: %s (%s)", path, source_type)
+    yield
+
 
 app = FastAPI(
     title="EIL-Calc API",
     description="HTTP API for Earthquake-Induced Landslide hazard certification",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# Allow CORS for local dev servers (e.g., Vite on 5173)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Normally empty: one reverse proxy serves the SPA and proxies /api/ to this
+# process, and `npm run dev` proxies through Vite — both same-origin. Set
+# EIL_CORS_ALLOW_ORIGINS only if something really does call in cross-origin.
+if settings.cors_allow_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -148,5 +175,12 @@ def assess_parcel(request: AssessmentRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Make sure to run the server from the `packages/eil-calc` directory
-    uvicorn.run("api:app", host="127.0.0.1", port=8000, reload=True)
+    # Make sure to run the server from the `packages/eil-calc` directory.
+    # Host/port/reload come from EIL_HOST / EIL_PORT / EIL_RELOAD; the defaults
+    # bind loopback with reload off, which is what the deployment wants.
+    uvicorn.run(
+        "api:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
+    )

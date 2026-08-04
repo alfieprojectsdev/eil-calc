@@ -1,0 +1,51 @@
+# The build does `COPY . .`, so anything not excluded here ends up in the image
+# and in a layer that survives deletion in a later layer.
+
+# Secrets. .env holds a plaintext PHIVOLCS_PASSWORD; it must never be baked in.
+# The container gets its configuration from the environment at run time.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local virtualenvs — wrong platform, and they mask the image's own install.
+.venv/
+venv/
+env/
+
+# VCS, editor and local tooling state
+.git/
+.gitignore
+.idea/
+.vscode/
+.antigravitycli/
+.claude/
+
+# Caches and build detritus
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Large data that must be a read-only mount, never image content.
+# The DEMs are ~28 GB together.
+*.tif
+*.tiff
+srtm/
+temp/
+archive/
+data/
+
+# Test fixtures are only needed by the test suite, which does not run in this
+# image. test_fixtures/ifsar_tile.tif is also covered by *.tif above.
+test_fixtures/
+tests/ground_truth/
+
+# Local-only working files
+session_log*.md
+*.docx
+*.csv
+start.bat
